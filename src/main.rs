@@ -5,36 +5,33 @@ const INITIAL_DICE_SUM: usize = 18;
 const BOARD: [Tile; 16] = {
     use Tile::*;
     [
-        Go, Wreck, Improve, Sabotage, Duel, Swap, Improve, Wreck, Duel, Sabotage, Improve, Wreck,
-        Duel, Swap, Improve, Sabotage,
+        Go,
+        Wreck,
+        Improve,
+        Sabotage,
+        SumDuel,
+        Swap,
+        Improve,
+        Wreck,
+        ProductDuel,
+        Sabotage,
+        Improve,
+        Wreck,
+        SumDuel,
+        Swap,
+        Improve,
+        Sabotage,
     ]
 };
 fn main() {
-    let mut players = HashMap::new();
+    let mut game = Game::new();
 
-    players.insert(
-        "Henry".to_string(),
-        Player::new(Die {
-            sides: vec![1, 2, 3, 4, 5, 6],
-        }),
-    );
-    players.insert(
-        "Kai".to_string(),
-        Player::new(Die {
-            sides: vec![1, 2, 3, 4, 5, 6],
-        }),
-    );
-
-    let mut game = Game {
-        board: BOARD,
-        players,
-    };
-    loop {
-        game.turn();
+    while game.turn().is_none() {
+        continue;
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Hash, Eq, PartialEq, PartialOrd, Ord, Clone)]
 struct Die {
     sides: Vec<usize>,
 }
@@ -48,15 +45,20 @@ impl Die {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Hash, Eq, PartialEq, PartialOrd, Ord, Clone)]
 struct Player {
     location: usize,
+    score: usize,
     die: Die,
 }
 
 impl Player {
     fn new(die: Die) -> Player {
-        Player { location: 0, die }
+        Player {
+            location: 0,
+            score: 0,
+            die,
+        }
     }
 }
 
@@ -67,13 +69,33 @@ enum Tile {
     Improve,
     Sabotage,
     Swap,
-    Duel,
+    SumDuel,
+    ProductDuel,
 }
 
 #[derive(Debug)]
 struct Game {
     board: [Tile; 16],
     players: HashMap<String, Player>,
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
+struct GameState {
+    players: Vec<Player>,
+}
+
+impl From<Game> for GameState {
+    fn from(game: Game) -> GameState {
+        let mut players: Vec<Player> = game.players.values().cloned().collect();
+        players.sort();
+
+        GameState { players }
+    }
+}
+
+// Map from state to reward
+struct StateActionTable {
+    table: HashMap<GameState, f64>,
 }
 
 impl Game {
@@ -87,7 +109,7 @@ impl Game {
 
             let mut dice: Vec<usize>;
             loop {
-                println!("Enter dice values: ");
+                println!("Enter 6 whitespace-separated dice values which sum to 18: ");
                 let mut dice_str = String::new();
                 std::io::stdin().read_line(&mut dice_str).unwrap();
                 dice = dice_str
@@ -142,7 +164,8 @@ impl Game {
         }
     }
 
-    fn turn(&mut self) {
+    fn turn(&mut self) -> Option<String> {
+        println!("{:?}", self);
         let player_names = self.players.keys().cloned().collect::<Vec<String>>();
         for name in player_names {
             let tile = {
@@ -176,8 +199,8 @@ impl Game {
                     println!("{} landed on Go", name);
                 }
                 Tile::Wreck => {
-                    let player = self.players.get_mut(&name).unwrap();
                     println!("{} landed on Wreck", name);
+                    let player = self.players.get_mut(&name).unwrap();
                     // choose one of your own die faces to decrease by two
                     let options: Vec<String> =
                         player.die.sides.iter().map(usize::to_string).collect();
@@ -194,8 +217,8 @@ impl Game {
                     player.die.sides.sort();
                 }
                 Tile::Improve => {
-                    let player = self.players.get_mut(&name).unwrap();
                     println!("{} landed on Improve", name);
+                    let player = self.players.get_mut(&name).unwrap();
                     // choose one of your own die faces to increase by one
                     let options: Vec<String> =
                         player.die.sides.iter().map(usize::to_string).collect();
@@ -213,6 +236,7 @@ impl Game {
                     player.die.sides.sort();
                 }
                 Tile::Sabotage => {
+                    println!("{} landed on Sabotage", name);
                     // choose an opponent's die face to decrease by one
                     let opponent_name = {
                         let player_names = self.players.keys().cloned().collect::<Vec<String>>();
@@ -248,6 +272,8 @@ impl Game {
                     opponent.die.sides.sort();
                 }
                 Tile::Swap => {
+                    // TODO implement increment/decrement constraint. I didn't do this because I like chaos.
+                    println!("{} landed on Swap", name);
                     // choose an opponent to swap a die face with
                     let opponent_name = {
                         let player_names = self.players.keys().cloned().collect::<Vec<String>>();
@@ -290,21 +316,119 @@ impl Game {
                         .interact()
                         .unwrap();
 
-                    let [player_die, opponent_die] =
+                    let [player, opponent] =
                         self.players.get_many_mut([&name, &opponent_name]).unwrap();
 
                     // TODO index not value
                     std::mem::swap(
-                        &mut player_die.die.sides[player_selection_index],
-                        &mut opponent_die.die.sides[opponent_selection_index],
+                        &mut player.die.sides[player_selection_index],
+                        &mut opponent.die.sides[opponent_selection_index],
                     );
-                    player_die.die.sides.sort();
-                    opponent_die.die.sides.sort();
+                    player.die.sides.sort();
+                    opponent.die.sides.sort();
                 }
-                Tile::Duel => {
-                    println!("{} landed on Duel", name);
+                Tile::SumDuel => {
+                    println!("{} landed on SumDuel", name);
+                    // roll three dice and sum the results
+                    let opponent_name = {
+                        let player_names = self.players.keys().cloned().collect::<Vec<String>>();
+                        let opponent_names = player_names
+                            .iter()
+                            .filter(|&n| n != &name)
+                            .cloned()
+                            .collect::<Vec<String>>();
+
+                        let selection = dialoguer::Select::new()
+                            .with_prompt("Select an opponent")
+                            .items(&opponent_names)
+                            .default(0)
+                            .interact()
+                            .unwrap();
+                        opponent_names[selection].clone()
+                    };
+
+                    let [player, opponent] =
+                        self.players.get_many_mut([&name, &opponent_name]).unwrap();
+
+                    let mut player_sum = 0;
+                    let mut opponent_sum = 0;
+                    for _ in 0..3 {
+                        player_sum += player.die.roll();
+                        opponent_sum += opponent.die.roll();
+                    }
+
+                    if player_sum > opponent_sum {
+                        println!("{} won the duel", name);
+                        player.score += 1;
+                    } else {
+                        println!("{} won the duel", opponent_name);
+                        opponent.score += 1;
+                    }
+                }
+                Tile::ProductDuel => {
+                    println!("{} landed on ProductDuel", name);
+                    // roll three dice and multiply the results
+                    let opponent_name = {
+                        let player_names = self.players.keys().cloned().collect::<Vec<String>>();
+                        let opponent_names = player_names
+                            .iter()
+                            .filter(|&n| n != &name)
+                            .cloned()
+                            .collect::<Vec<String>>();
+
+                        let selection = dialoguer::Select::new()
+                            .with_prompt("Select an opponent")
+                            .items(&opponent_names)
+                            .default(0)
+                            .interact()
+                            .unwrap();
+                        opponent_names[selection].clone()
+                    };
+
+                    let [player, opponent] =
+                        self.players.get_many_mut([&name, &opponent_name]).unwrap();
+
+                    let mut player_product = 1;
+                    let mut opponent_product = 1;
+
+                    for _ in 0..3 {
+                        player_product *= player.die.roll();
+                        opponent_product *= opponent.die.roll();
+                    }
+
+                    if player_product > opponent_product {
+                        println!("{} won the duel", name);
+                        player.score += 1;
+                    } else {
+                        println!("{} won the duel", opponent_name);
+                        opponent.score += 1;
+                    }
                 }
             }
         }
+
+        let max_score = self.players.values().map(|p| p.score).max().unwrap();
+        if max_score >= 5 {
+            let winners = self
+                .players
+                .iter()
+                .filter(|(_, p)| p.score == max_score)
+                .map(|(name, _)| name)
+                .cloned()
+                .collect::<Vec<String>>();
+
+            if winners.len() == 1 {
+                println!("{} wins!", winners[0]);
+                return Some(winners[0].clone());
+            } else {
+                println!("Multiple people are fulfilling the win condition and are tied. Move to a faceoff.");
+                // remove all players except the winners
+                self.players.retain(|name, _| winners.contains(name));
+
+                println!("Sudden death!");
+                return None;
+            }
+        }
+        None
     }
 }
